@@ -1,47 +1,261 @@
 # cuda-oplib
 
-`cuda-oplib` is a CUDA operator library scaffold for building, benchmarking,
-testing, and later open-sourcing custom GPU kernels.
+> Personal CUDA operator learning lab with teaching-oriented kernels, lightweight engineering, and public dev notes.
 
-This repository is intentionally organized around long-term growth:
+![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900?logo=nvidia&logoColor=white)
+![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=c%2B%2B&logoColor=white)
+[![CI](https://img.shields.io/badge/CI-metadata%20check-2ea44f)](./.github/workflows/ci.yml)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 
-- `include/`: public C++ headers
-- `src/kernel/`: CUDA operator implementations
-- `tests/`: correctness tests
-- `benchmarks/`: performance measurement entry points
-- `examples/`: minimal usage examples
-- `bindings/`: framework integrations such as PyTorch
-- `docs/`: architecture, operator conventions, and roadmap
-- `scripts/`: local developer workflows
+<a id="top"></a>
+<a id="zh-cn"></a>
 
-## Current status
+## Quick Links
 
-The repository currently includes two integrated operators:
+- [中文](#zh-cn)
+- [English](#english)
+- [开发日志 / Dev Log](./devLog.md)
+- [LayerNorm API](./include/cuda_oplib/layernorm.h)
+- [LayerNorm Kernel](./src/kernel/layernorm_half2.cu)
+- [LayerNorm Test](./tests/cpp/test_layernorm.cu)
+- [LayerNorm Benchmark](./benchmarks/bench_layernorm.cu)
+- [LayerNorm Example](./examples/cpp/layernorm_example.cu)
+- [CI Workflow](./.github/workflows/ci.yml)
 
-- `vector_add`: a simple float32 elementwise add kernel used to validate the
-  end-to-end project layout
-- `layernorm_half`: a half-precision LayerNorm operator backed by a `half2`
-  kernel with float accumulation, odd-width tail handling, and project-level
-  test / benchmark / example coverage
+<details open>
+<summary><strong>中文</strong></summary>
 
-The current `layernorm_half` path is designed as a practical operator-integration
-exercise:
+## 项目定位
 
-- public API in `include/cuda_oplib/layernorm.h`
-- implementation in `src/kernel/layernorm_half2.cu`
-- correctness test in `tests/cpp/test_layernorm.cu`
-- benchmark in `benchmarks/bench_layernorm.cu`
-- example in `examples/cpp/layernorm_example.cu`
+`cuda-oplib` 是我的个人 CUDA 算子开发学习项目。
 
-At a high level, the operator:
+它的核心目标不是只做出几个能跑的 kernel，而是把 CUDA 算子从 `demo -> benchmark -> 修 bug -> 正式接入` 的全过程尽量保留下来，逐步整理成一个同时具备学习价值和轻度工程化结构的个人项目。
 
-- computes per-row mean and variance using Welford-style reduction
-- accumulates statistics in float for numerical stability
-- uses `half2` vectorized load/store when row pointers are aligned
-- falls back to scalar half processing for odd tails or unaligned cases
+这个仓库会持续朝四个方向推进：
 
-This makes it a useful stepping stone toward a broader operator library while
-still remaining small enough to iterate on quickly.
+- `学习化`：系统练习 CUDA 算子开发
+- `笔记化`：记录版本演进、实验结果和设计取舍
+- `工程化`：把算子逐步接入统一 API、实现、测试、benchmark、example
+- `输出化`：作为我公开分享 CUDA 学习过程和实践结果的载体
+
+> [!NOTE]
+> 这不是一个只追求最终性能数字的黑盒仓库。我更在意把开发过程、思考路径、踩坑记录和教学级代码一起留下来。
+
+## 当前内容
+
+### Operator Snapshot
+
+| Operator | Status | What It Is | Entry |
+|---|---|---|---|
+| `vector_add` | Integrated | 最小 float32 元素加法算子，用来验证项目骨架 | [`src/kernel/vector_add.cu`](./src/kernel/vector_add.cu) |
+| `layernorm_half` | Integrated | 基于 `half2` 路径的 half 精度 LayerNorm，统计使用 float 累加 | [`src/kernel/layernorm_half2.cu`](./src/kernel/layernorm_half2.cu) |
+
+### LayerNorm Overview
+
+`layernorm_half` 目前已经具备完整的正式接入链路：
+
+- API: [`include/cuda_oplib/layernorm.h`](./include/cuda_oplib/layernorm.h)
+- Kernel: [`src/kernel/layernorm_half2.cu`](./src/kernel/layernorm_half2.cu)
+- Test: [`tests/cpp/test_layernorm.cu`](./tests/cpp/test_layernorm.cu)
+- Benchmark: [`benchmarks/bench_layernorm.cu`](./benchmarks/bench_layernorm.cu)
+- Example: [`examples/cpp/layernorm_example.cu`](./examples/cpp/layernorm_example.cu)
+- Dev Log: [`devLog.md`](./devLog.md)
+
+这个算子目前重点体现的是：
+
+- 行级 LayerNorm 的 CUDA 实现
+- Welford 风格的均值/方差统计
+- half 存储、float 累加
+- 对齐时走 `half2` 向量化路径
+- odd tail 或未对齐时自动退回标量处理
+
+## LayerNorm Benchmark Snapshot
+
+下表是当前阶段具有代表性的实验结果，用来展示内核演进方向，而不是作为最终性能结论。
+
+| Variant | Shape | Dtype | Avg Latency |
+|---|---:|---|---:|
+| `torch.nn.LayerNorm` | `512 x 768` | `float32` | `0.026 ms` |
+| `warp kernel` | `512 x 768` | `float32` | `0.014 ms` |
+| `reduction kernel` | `512 x 768` | `float32` | `0.037 ms` |
+| `welford kernel` | `512 x 768` | `float32` | `0.015 ms` |
+
+更完整的开发过程、版本差异和实验背景记录在 [`devLog.md`](./devLog.md)。
+
+## 仓库结构
+
+```text
+cuda-oplib
+├── include/                public APIs
+├── src/kernel/             formal CUDA operator implementations
+├── src/pydemo/             experiments, prototypes, and comparison scripts
+├── tests/                  correctness tests
+├── benchmarks/             performance benchmarks
+├── examples/               minimal usage examples
+├── bindings/               future framework bindings
+└── docs/                   notes, architecture, and planning
+```
+
+这也是这个仓库想强调的一个方向：先在 `src/pydemo/` 做实验，再把稳定版本推进到 `src/kernel/`，最后补齐 test、benchmark 和 example。
+
+## 开发风格
+
+这个项目尽量保持“教学可读 + 工程可落地”的平衡。
+
+我的推进方式通常是：
+
+1. 先实现一个容易解释的版本
+2. 再逐步做性能优化
+3. 在每一轮优化中记录为什么这么改
+4. 最后把稳定路径接进正式项目结构
+
+因此你会在仓库里看到：
+
+- baseline 和优化版本并存
+- benchmark 对比脚本
+- bug 修复的上下文
+- 从实验原型走向正式接入的完整痕迹
+
+## Build
+
+要求：
+
+- CUDA Toolkit 12.x 或更新
+- CMake 3.24 或更新
+- 支持 C++17 的主机编译器
+
+```bash
+./scripts/build.sh
+```
+
+运行测试：
+
+```bash
+./scripts/run_tests.sh
+```
+
+或者直接使用 CMake：
+
+```bash
+cmake -S . -B build
+cmake --build build -j
+ctest --test-dir build
+```
+
+## Roadmap
+
+- [x] `vector_add` scaffold
+- [x] `layernorm_half` half2 operator integration
+- [x] LayerNorm correctness test
+- [x] LayerNorm benchmark
+- [x] LayerNorm example
+- [ ] float LayerNorm path
+- [ ] PyTorch binding
+- [ ] RMSNorm
+- [ ] Softmax
+- [ ] More public dev notes and teaching-grade kernels
+
+## License
+
+Apache-2.0
+
+</details>
+
+<a id="english"></a>
+
+<details>
+<summary><strong>English</strong></summary>
+
+## Project Purpose
+
+`cuda-oplib` is my personal CUDA operator learning project.
+
+The goal is not just to produce a few working kernels. I want this repository to preserve the full path from `demo -> benchmark -> bug fixing -> formal integration`, and gradually shape that process into a project that is both educational and lightly engineered.
+
+This repository is intentionally built around four parallel goals:
+
+- `Learning-oriented`: systematic CUDA operator practice
+- `Notebook-oriented`: version history, experiment results, and design tradeoffs
+- `Lightly engineered`: operators wired into API, implementation, tests, benchmarks, and examples
+- `Public-facing`: a place to share what I am learning and building
+
+> [!NOTE]
+> This is not meant to be a black-box repository that only shows final performance numbers. The development process, reasoning, bugs, and teaching-oriented code are part of the product.
+
+## Current Status
+
+### Operator Snapshot
+
+| Operator | Status | What It Is | Entry |
+|---|---|---|---|
+| `vector_add` | Integrated | Minimal float32 add operator used to validate the project scaffold | [`src/kernel/vector_add.cu`](./src/kernel/vector_add.cu) |
+| `layernorm_half` | Integrated | Half-precision LayerNorm centered around a `half2` execution path with float accumulation | [`src/kernel/layernorm_half2.cu`](./src/kernel/layernorm_half2.cu) |
+
+### LayerNorm Overview
+
+The current `layernorm_half` path already includes:
+
+- API: [`include/cuda_oplib/layernorm.h`](./include/cuda_oplib/layernorm.h)
+- Kernel: [`src/kernel/layernorm_half2.cu`](./src/kernel/layernorm_half2.cu)
+- Test: [`tests/cpp/test_layernorm.cu`](./tests/cpp/test_layernorm.cu)
+- Benchmark: [`benchmarks/bench_layernorm.cu`](./benchmarks/bench_layernorm.cu)
+- Example: [`examples/cpp/layernorm_example.cu`](./examples/cpp/layernorm_example.cu)
+- Dev Log: [`devLog.md`](./devLog.md)
+
+At a high level, it currently emphasizes:
+
+- row-wise LayerNorm in CUDA
+- Welford-style mean/variance reduction
+- half storage with float accumulation
+- `half2` vectorized execution when alignment permits
+- scalar fallback for odd tails or unaligned cases
+
+## LayerNorm Benchmark Snapshot
+
+The table below shows representative prototype-stage results. It is intended as a development snapshot, not a final performance claim.
+
+| Variant | Shape | Dtype | Avg Latency |
+|---|---:|---|---:|
+| `torch.nn.LayerNorm` | `512 x 768` | `float32` | `0.026 ms` |
+| `warp kernel` | `512 x 768` | `float32` | `0.014 ms` |
+| `reduction kernel` | `512 x 768` | `float32` | `0.037 ms` |
+| `welford kernel` | `512 x 768` | `float32` | `0.015 ms` |
+
+For the full iteration history, notes, and debugging context, see [`devLog.md`](./devLog.md).
+
+## Repository Layout
+
+```text
+cuda-oplib
+├── include/                public APIs
+├── src/kernel/             formal CUDA operator implementations
+├── src/pydemo/             experiments, prototypes, and comparison scripts
+├── tests/                  correctness tests
+├── benchmarks/             performance benchmarks
+├── examples/               minimal usage examples
+├── bindings/               future framework bindings
+└── docs/                   notes, architecture, and planning
+```
+
+One of the main ideas behind this repository is to keep the path visible: experiment in `src/pydemo/`, stabilize in `src/kernel/`, then add tests, benchmarks, and examples.
+
+## Development Style
+
+This project tries to balance teaching readability with practical engineering.
+
+My usual workflow is:
+
+1. build a version that is easy to explain
+2. optimize it step by step
+3. document why each optimization exists
+4. promote the stable path into the formal project structure
+
+That is why the repository intentionally keeps:
+
+- baseline and optimized versions
+- comparison scripts
+- bug-fix context
+- traces of how a prototype evolves into an operator
 
 ## Build
 
@@ -61,24 +275,29 @@ Run tests:
 ./scripts/run_tests.sh
 ```
 
-## Suggested growth path
+Or directly with CMake:
 
-1. Add one directory pair per operator interface and implementation.
-2. Keep correctness tests and benchmarks together with every new operator.
-3. Add framework bindings only after the C++/CUDA core API stabilizes.
-4. Publish reproducible benchmark configs before the first open-source release.
+```bash
+cmake -S . -B build
+cmake --build build -j
+ctest --test-dir build
+```
 
-## Planned first-wave operators
+## Roadmap
 
-- layernorm
-- rmsnorm
-- softmax
-- gemm epilogue fusion
-- quantize / dequantize
-- rope / rotary-related kernels
-- cache and attention utility kernels
+- [x] `vector_add` scaffold
+- [x] `layernorm_half` half2 operator integration
+- [x] LayerNorm correctness test
+- [x] LayerNorm benchmark
+- [x] LayerNorm example
+- [ ] float LayerNorm path
+- [ ] PyTorch binding
+- [ ] RMSNorm
+- [ ] Softmax
+- [ ] More public dev notes and teaching-grade kernels
 
 ## License
 
-Apache-2.0 for now. Change it before publishing if your release strategy
-requires a different license.
+Apache-2.0
+
+</details>
