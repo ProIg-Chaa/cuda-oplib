@@ -8,3 +8,14 @@ set_target_properties(
         CUDA_SEPARABLE_COMPILATION ON
 )
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cpp/layernorm_example.cu")
+    add_executable(layernorm_example cpp/layernorm_example.cu)
+
+    target_link_libraries(layernorm_example PRIVATE cuda_oplib::cuda_oplib CUDA::cudart)
+
+    set_target_properties(
+        layernorm_example
+        PROPERTIES
+            CUDA_SEPARABLE_COMPILATION ON
+    )
+endif()

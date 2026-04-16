@@ -1,4 +1,14 @@
-add_library(cuda_oplib SHARED operators/vector_add.cu)
+set(CUDA_OPLIB_SOURCES
+    kernel/vector_add.cu
+)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kernel/layernorm_half2.cu")
+    list(APPEND CUDA_OPLIB_SOURCES
+        kernel/layernorm_half2.cu
+    )
+endif()
+
+add_library(cuda_oplib SHARED ${CUDA_OPLIB_SOURCES})
 add_library(cuda_oplib::cuda_oplib ALIAS cuda_oplib)
 
 target_include_directories(

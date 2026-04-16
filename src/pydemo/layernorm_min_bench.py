@@ -54,11 +54,17 @@ def main():
 
     official_ms = bench_cuda(lambda: ln(x))
     wrap_ms = bench_cuda(lambda: ext.forward_wrap(x, gamma, beta, eps))
+    reduction_ms = bench_cuda(lambda: ext.forward_reduction(x, gamma, beta, eps))
+    welford_ms = bench_cuda(lambda: ext.forward_welford(x, gamma, beta, eps))
 
     print(f"B={batch}, D={hidden}, device={device}, dtype={dtype}")
     print(f"official torch.nn.LayerNorm : {official_ms:.3f} ms / iter")
-    print(f"your wrap cuda kernel       : {wrap_ms:.3f} ms / iter")
-    print(f"wrap / official             : {wrap_ms / official_ms:.3f}x slower")
+    print(f"warp cuda kernel            : {wrap_ms:.3f} ms / iter")
+    print(f"reduction cuda kernel       : {reduction_ms:.3f} ms / iter")
+    print(f"welford cuda kernel         : {welford_ms:.3f} ms / iter")
+    print(f"warp / official             : {wrap_ms / official_ms:.3f}x slower")
+    print(f"reduction / official        : {reduction_ms / official_ms:.3f}x slower")
+    print(f"welford / official          : {welford_ms / official_ms:.3f}x slower")
 
 
 if __name__ == "__main__":
