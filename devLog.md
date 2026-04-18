@@ -729,6 +729,29 @@ The build and runtime path were validated during integration:
 - `test_rmsnorm` passed
 - `rmsnorm_example` ran successfully
 
+### 22.1 Engineering Benchmark Results
+
+After formal integration, both operator-level engineering benchmarks were run
+through the project-native benchmark binaries.
+
+Measured results:
+
+- `bench_layernorm 4096 768 200`
+  - `avg_ms = 0.208`
+  - `approx_throughput_GBps = 90.735`
+- `bench_rmsnorm 4096 768 200`
+  - `avg_ms = 0.114`
+  - `approx_throughput_GBps = 165.056`
+
+Interpretation:
+
+- the formal `rmsnorm_half` path is substantially faster than the formal
+  `layernorm_half` path on this benchmark shape
+- this is consistent with the operator structure, because RMSNorm avoids the
+  mean-centering work and the extra `beta` affine path present in LayerNorm
+- these measurements are especially useful because they come from the
+  engineering-grade benchmark binaries rather than prototype scripts
+
 ## 23. Git History
 
 A formal integration commit was created:
@@ -788,6 +811,7 @@ At the end of this round, the repository contains:
 - formal `rmsnorm_half` operator API
 - half2-based RMSNorm project kernel implementation
 - RMSNorm test, benchmark, and example targets
+- recorded engineering benchmark results for both formal normalization operators
 
 The repository has now moved beyond a single-operator demo and into a small but
 coherent operator-learning project with both development-grade and

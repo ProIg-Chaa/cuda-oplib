@@ -129,6 +129,17 @@ RMSNorm 也已经有对应的开发级实验层：
 
 更完整的开发过程、版本差异和实验背景记录在 [`devLog.md`](./devLog.md)。
 
+## Engineering Benchmark Snapshot
+
+下面这组数据来自工程级正式 benchmark，可直接反映当前项目内正式算子的吞吐水平。
+
+| Operator | Shape | Iters | Avg Latency | Approx Throughput |
+|---|---:|---:|---:|---:|
+| `layernorm_half` | `4096 x 768` | `200` | `0.208 ms` | `90.735 GB/s` |
+| `rmsnorm_half` | `4096 x 768` | `200` | `0.114 ms` | `165.056 GB/s` |
+
+这组结果说明，在当前正式实现下，`rmsnorm_half` 明显快于 `layernorm_half`。这符合两个算子的计算结构差异，因为 RMSNorm 少了均值中心化和 `beta` 仿射路径。
+
 ## 仓库结构
 
 ```text
@@ -337,6 +348,17 @@ The table below shows representative prototype-stage results. It is intended as 
 | `warp kernel` | `512 x 768` | `float32` | `0.014 ms` |
 | `reduction kernel` | `512 x 768` | `float32` | `0.037 ms` |
 | `welford kernel` | `512 x 768` | `float32` | `0.015 ms` |
+
+## Engineering Benchmark Snapshot
+
+The table below comes from the project-native engineering benchmark targets and reflects the current formal operator implementations.
+
+| Operator | Shape | Iters | Avg Latency | Approx Throughput |
+|---|---:|---:|---:|---:|
+| `layernorm_half` | `4096 x 768` | `200` | `0.208 ms` | `90.735 GB/s` |
+| `rmsnorm_half` | `4096 x 768` | `200` | `0.114 ms` | `165.056 GB/s` |
+
+At the moment, `rmsnorm_half` is clearly faster than `layernorm_half` in the formal benchmark path. That matches the structural difference between the operators, since RMSNorm avoids mean-centering and the `beta` affine path.
 
 For the full iteration history, notes, and debugging context, see [`devLog.md`](./devLog.md).
 
