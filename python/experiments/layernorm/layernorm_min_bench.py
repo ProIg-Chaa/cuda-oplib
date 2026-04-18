@@ -1,3 +1,5 @@
+# 旧的最小 benchmark，偏单次快速测试
+
 import pathlib
 
 import torch

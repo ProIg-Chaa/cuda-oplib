@@ -1,3 +1,5 @@
+# 旧的单文件 demo，偏历史原型
+
 import argparse
 import pathlib
 import time

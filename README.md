@@ -20,6 +20,7 @@
 - [LayerNorm Test](./tests/cpp/test_layernorm.cu)
 - [LayerNorm Benchmark](./benchmarks/bench_layernorm.cu)
 - [LayerNorm Example](./examples/cpp/layernorm_example.cu)
+- [LayerNorm Experiment Driver](./python/experiments/layernorm/compare.py)
 - [CI Workflow](./.github/workflows/ci.yml)
 
 <details open>
@@ -69,6 +70,16 @@
 - 对齐时走 `half2` 向量化路径
 - odd tail 或未对齐时自动退回标量处理
 
+除了正式接入链路，LayerNorm 现在还有一套开发级实验层，用来统一做原型验证、版本对比和教学记录：
+
+- Experiment Driver: [`python/experiments/layernorm/compare.py`](./python/experiments/layernorm/compare.py)
+- Registry: [`python/experiments/layernorm/registry.py`](./python/experiments/layernorm/registry.py)
+- Cases: [`python/experiments/layernorm/cases.py`](./python/experiments/layernorm/cases.py)
+- Reports: [`python/experiments/layernorm/report.py`](./python/experiments/layernorm/report.py)
+- References: [`python/experiments/layernorm/refs.py`](./python/experiments/layernorm/refs.py)
+
+这套实验层当前支持把 `torch_official`、`torch_python`、`warp`、`reduction`、`welford`、`half2` 注册进统一对比流程，在同一组 case 下跑 correctness 和 benchmark。
+
 ## LayerNorm Benchmark Snapshot
 
 下表是当前阶段具有代表性的实验结果，用来展示内核演进方向，而不是作为最终性能结论。
@@ -88,7 +99,8 @@
 cuda-oplib
 ├── include/                public APIs
 ├── src/kernel/             formal CUDA operator implementations
-├── src/pydemo/             experiments, prototypes, and comparison scripts
+├── src/pydemo/             older experiments and prototype-stage scripts
+├── python/experiments/     development-grade experiment modules and compare drivers
 ├── tests/                  correctness tests
 ├── benchmarks/             performance benchmarks
 ├── examples/               minimal usage examples
@@ -96,7 +108,22 @@ cuda-oplib
 └── docs/                   notes, architecture, and planning
 ```
 
-这也是这个仓库想强调的一个方向：先在 `src/pydemo/` 做实验，再把稳定版本推进到 `src/kernel/`，最后补齐 test、benchmark 和 example。
+这也是这个仓库想强调的一个方向：先在开发级实验层里快速验证，再把稳定版本推进到工程级正式层。
+
+```text
+development-grade experiments
+-> registry / compare / report
+-> stable kernel selection
+-> formal operator integration
+-> test / benchmark / example
+```
+
+其中：
+
+- `python/experiments/`
+  负责开发级实验、统一 case、统一注册和统一报告输出
+- `src/kernel/ + include/ + tests/ + benchmarks/ + examples/`
+  负责工程级正式算子能力
 
 ## 开发风格
 
@@ -112,7 +139,7 @@ cuda-oplib
 因此你会在仓库里看到：
 
 - baseline 和优化版本并存
-- benchmark 对比脚本
+- 开发级统一实验入口
 - bug 修复的上下文
 - 从实验原型走向正式接入的完整痕迹
 
@@ -142,6 +169,13 @@ cmake --build build -j
 ctest --test-dir build
 ```
 
+开发级实验层当前的统一入口示例：
+
+```bash
+python3 python/experiments/layernorm/compare.py --case main_fp32
+python3 python/experiments/layernorm/compare.py --case main_fp16 --markdown
+```
+
 ## Roadmap
 
 - [x] `vector_add` scaffold
@@ -149,6 +183,7 @@ ctest --test-dir build
 - [x] LayerNorm correctness test
 - [x] LayerNorm benchmark
 - [x] LayerNorm example
+- [x] LayerNorm development-grade experiment framework
 - [ ] float LayerNorm path
 - [ ] PyTorch binding
 - [ ] RMSNorm
@@ -210,6 +245,16 @@ At a high level, it currently emphasizes:
 - `half2` vectorized execution when alignment permits
 - scalar fallback for odd tails or unaligned cases
 
+Besides the formal operator path, LayerNorm now also has a development-grade experiment layer used for prototype comparison, version tracking, and teaching-oriented benchmarking:
+
+- Experiment Driver: [`python/experiments/layernorm/compare.py`](./python/experiments/layernorm/compare.py)
+- Registry: [`python/experiments/layernorm/registry.py`](./python/experiments/layernorm/registry.py)
+- Cases: [`python/experiments/layernorm/cases.py`](./python/experiments/layernorm/cases.py)
+- Reports: [`python/experiments/layernorm/report.py`](./python/experiments/layernorm/report.py)
+- References: [`python/experiments/layernorm/refs.py`](./python/experiments/layernorm/refs.py)
+
+This experiment layer currently supports registering `torch_official`, `torch_python`, `warp`, `reduction`, `welford`, and `half2`, then comparing them under unified cases for correctness and latency.
+
 ## LayerNorm Benchmark Snapshot
 
 The table below shows representative prototype-stage results. It is intended as a development snapshot, not a final performance claim.
@@ -229,7 +274,8 @@ For the full iteration history, notes, and debugging context, see [`devLog.md`](
 cuda-oplib
 ├── include/                public APIs
 ├── src/kernel/             formal CUDA operator implementations
-├── src/pydemo/             experiments, prototypes, and comparison scripts
+├── src/pydemo/             older experiments and prototype-stage scripts
+├── python/experiments/     development-grade experiment modules and compare drivers
 ├── tests/                  correctness tests
 ├── benchmarks/             performance benchmarks
 ├── examples/               minimal usage examples
@@ -237,7 +283,22 @@ cuda-oplib
 └── docs/                   notes, architecture, and planning
 ```
 
-One of the main ideas behind this repository is to keep the path visible: experiment in `src/pydemo/`, stabilize in `src/kernel/`, then add tests, benchmarks, and examples.
+One of the main ideas behind this repository is to keep the path visible: validate quickly in the development-grade experiment layer, then promote stable kernels into the formal project layer.
+
+```text
+development-grade experiments
+-> registry / compare / report
+-> stable kernel selection
+-> formal operator integration
+-> test / benchmark / example
+```
+
+In practice:
+
+- `python/experiments/`
+  handles fast comparison, shared cases, and unified experiment reports
+- `src/kernel/ + include/ + tests/ + benchmarks/ + examples/`
+  handle formal project integration
 
 ## Development Style
 
@@ -253,7 +314,7 @@ My usual workflow is:
 That is why the repository intentionally keeps:
 
 - baseline and optimized versions
-- comparison scripts
+- a development-grade unified experiment entrypoint
 - bug-fix context
 - traces of how a prototype evolves into an operator
 
@@ -283,6 +344,13 @@ cmake --build build -j
 ctest --test-dir build
 ```
 
+Current development-grade experiment entrypoints include:
+
+```bash
+python3 python/experiments/layernorm/compare.py --case main_fp32
+python3 python/experiments/layernorm/compare.py --case main_fp16 --markdown
+```
+
 ## Roadmap
 
 - [x] `vector_add` scaffold
@@ -290,6 +358,7 @@ ctest --test-dir build
 - [x] LayerNorm correctness test
 - [x] LayerNorm benchmark
 - [x] LayerNorm example
+- [x] LayerNorm development-grade experiment framework
 - [ ] float LayerNorm path
 - [ ] PyTorch binding
 - [ ] RMSNorm
