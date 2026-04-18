@@ -8,6 +8,12 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kernel/layernorm_half2.cu")
     )
 endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kernel/rmsnorm_half2.cu")
+    list(APPEND CUDA_OPLIB_SOURCES
+        kernel/rmsnorm_half2.cu
+    )
+endif()
+
 add_library(cuda_oplib SHARED ${CUDA_OPLIB_SOURCES})
 add_library(cuda_oplib::cuda_oplib ALIAS cuda_oplib)
 
@@ -41,4 +47,3 @@ install(
     DIRECTORY ${PROJECT_SOURCE_DIR}/include/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
-

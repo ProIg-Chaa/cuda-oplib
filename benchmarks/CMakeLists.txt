@@ -19,3 +19,15 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bench_layernorm.cu")
             CUDA_SEPARABLE_COMPILATION ON
     )
 endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bench_rmsnorm.cu")
+    add_executable(bench_rmsnorm bench_rmsnorm.cu)
+
+    target_link_libraries(bench_rmsnorm PRIVATE cuda_oplib::cuda_oplib CUDA::cudart)
+
+    set_target_properties(
+        bench_rmsnorm
+        PROPERTIES
+            CUDA_SEPARABLE_COMPILATION ON
+    )
+endif()

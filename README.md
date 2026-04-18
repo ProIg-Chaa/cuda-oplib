@@ -21,6 +21,12 @@
 - [LayerNorm Benchmark](./benchmarks/bench_layernorm.cu)
 - [LayerNorm Example](./examples/cpp/layernorm_example.cu)
 - [LayerNorm Experiment Driver](./python/experiments/layernorm/compare.py)
+- [RMSNorm API](./include/cuda_oplib/rmsnorm.h)
+- [RMSNorm Kernel](./src/kernel/rmsnorm_half2.cu)
+- [RMSNorm Test](./tests/cpp/test_rmsnorm.cu)
+- [RMSNorm Benchmark](./benchmarks/bench_rmsnorm.cu)
+- [RMSNorm Example](./examples/cpp/rmsnorm_example.cu)
+- [RMSNorm Experiment Driver](./python/experiments/RMSnorm/compare.py)
 - [CI Workflow](./.github/workflows/ci.yml)
 
 <details open>
@@ -50,6 +56,7 @@
 |---|---|---|---|
 | `vector_add` | Integrated | 最小 float32 元素加法算子，用来验证项目骨架 | [`src/kernel/vector_add.cu`](./src/kernel/vector_add.cu) |
 | `layernorm_half` | Integrated | 基于 `half2` 路径的 half 精度 LayerNorm，统计使用 float 累加 | [`src/kernel/layernorm_half2.cu`](./src/kernel/layernorm_half2.cu) |
+| `rmsnorm_half` | Integrated | 基于 `half2` 路径的 half 精度 RMSNorm，平方和统计使用 float 累加 | [`src/kernel/rmsnorm_half2.cu`](./src/kernel/rmsnorm_half2.cu) |
 
 ### LayerNorm Overview
 
@@ -79,6 +86,35 @@
 - References: [`python/experiments/layernorm/refs.py`](./python/experiments/layernorm/refs.py)
 
 这套实验层当前支持把 `torch_official`、`torch_python`、`warp`、`reduction`、`welford`、`half2` 注册进统一对比流程，在同一组 case 下跑 correctness 和 benchmark。
+
+### RMSNorm Overview
+
+`rmsnorm_half` 现在也已经具备完整的正式接入链路：
+
+- API: [`include/cuda_oplib/rmsnorm.h`](./include/cuda_oplib/rmsnorm.h)
+- Kernel: [`src/kernel/rmsnorm_half2.cu`](./src/kernel/rmsnorm_half2.cu)
+- Test: [`tests/cpp/test_rmsnorm.cu`](./tests/cpp/test_rmsnorm.cu)
+- Benchmark: [`benchmarks/bench_rmsnorm.cu`](./benchmarks/bench_rmsnorm.cu)
+- Example: [`examples/cpp/rmsnorm_example.cu`](./examples/cpp/rmsnorm_example.cu)
+- Dev Log: [`devLog.md`](./devLog.md)
+
+这个算子目前重点体现的是：
+
+- 行级 RMSNorm 的 CUDA 实现
+- half 存储、float 累加平方和
+- 对齐时走 `half2` 向量化路径
+- odd tail 或未对齐时自动退回标量处理
+- 从开发级实验层晋升到工程级正式算子的完整接入过程
+
+RMSNorm 也已经有对应的开发级实验层：
+
+- Experiment Driver: [`python/experiments/RMSnorm/compare.py`](./python/experiments/RMSnorm/compare.py)
+- Registry: [`python/experiments/RMSnorm/registry.py`](./python/experiments/RMSnorm/registry.py)
+- Cases: [`python/experiments/RMSnorm/cases.py`](./python/experiments/RMSnorm/cases.py)
+- Reports: [`python/experiments/RMSnorm/report.py`](./python/experiments/RMSnorm/report.py)
+- References: [`python/experiments/RMSnorm/refs.py`](./python/experiments/RMSnorm/refs.py)
+
+这套实验层当前支持把 `torch_official`、`torch_python`、`f32_warp`、`half2_warp` 注册进统一对比流程，在同一组 case 下跑 correctness 和 benchmark。
 
 ## LayerNorm Benchmark Snapshot
 
@@ -174,6 +210,8 @@ ctest --test-dir build
 ```bash
 python3 python/experiments/layernorm/compare.py --case main_fp32
 python3 python/experiments/layernorm/compare.py --case main_fp16 --markdown
+python3 python/experiments/RMSnorm/compare.py --case main_fp32
+python3 python/experiments/RMSnorm/compare.py --case main_fp16 --markdown
 ```
 
 ## Roadmap
@@ -184,9 +222,13 @@ python3 python/experiments/layernorm/compare.py --case main_fp16 --markdown
 - [x] LayerNorm benchmark
 - [x] LayerNorm example
 - [x] LayerNorm development-grade experiment framework
+- [x] `rmsnorm_half` half2 operator integration
+- [x] RMSNorm correctness test
+- [x] RMSNorm benchmark
+- [x] RMSNorm example
+- [x] RMSNorm development-grade experiment framework
 - [ ] float LayerNorm path
 - [ ] PyTorch binding
-- [ ] RMSNorm
 - [ ] Softmax
 - [ ] More public dev notes and teaching-grade kernels
 
@@ -225,6 +267,7 @@ This repository is intentionally built around four parallel goals:
 |---|---|---|---|
 | `vector_add` | Integrated | Minimal float32 add operator used to validate the project scaffold | [`src/kernel/vector_add.cu`](./src/kernel/vector_add.cu) |
 | `layernorm_half` | Integrated | Half-precision LayerNorm centered around a `half2` execution path with float accumulation | [`src/kernel/layernorm_half2.cu`](./src/kernel/layernorm_half2.cu) |
+| `rmsnorm_half` | Integrated | Half-precision RMSNorm centered around a `half2` execution path with float accumulation | [`src/kernel/rmsnorm_half2.cu`](./src/kernel/rmsnorm_half2.cu) |
 
 ### LayerNorm Overview
 
@@ -254,6 +297,35 @@ Besides the formal operator path, LayerNorm now also has a development-grade exp
 - References: [`python/experiments/layernorm/refs.py`](./python/experiments/layernorm/refs.py)
 
 This experiment layer currently supports registering `torch_official`, `torch_python`, `warp`, `reduction`, `welford`, and `half2`, then comparing them under unified cases for correctness and latency.
+
+### RMSNorm Overview
+
+The current `rmsnorm_half` path already includes:
+
+- API: [`include/cuda_oplib/rmsnorm.h`](./include/cuda_oplib/rmsnorm.h)
+- Kernel: [`src/kernel/rmsnorm_half2.cu`](./src/kernel/rmsnorm_half2.cu)
+- Test: [`tests/cpp/test_rmsnorm.cu`](./tests/cpp/test_rmsnorm.cu)
+- Benchmark: [`benchmarks/bench_rmsnorm.cu`](./benchmarks/bench_rmsnorm.cu)
+- Example: [`examples/cpp/rmsnorm_example.cu`](./examples/cpp/rmsnorm_example.cu)
+- Dev Log: [`devLog.md`](./devLog.md)
+
+At a high level, it currently emphasizes:
+
+- row-wise RMSNorm in CUDA
+- half storage with float accumulation for the sum of squares
+- `half2` vectorized execution when alignment permits
+- scalar fallback for odd tails or unaligned cases
+- a complete promotion path from development-grade experiments into the engineering-grade operator layer
+
+RMSNorm also now has a development-grade experiment layer used for prototype comparison, version tracking, and teaching-oriented benchmarking:
+
+- Experiment Driver: [`python/experiments/RMSnorm/compare.py`](./python/experiments/RMSnorm/compare.py)
+- Registry: [`python/experiments/RMSnorm/registry.py`](./python/experiments/RMSnorm/registry.py)
+- Cases: [`python/experiments/RMSnorm/cases.py`](./python/experiments/RMSnorm/cases.py)
+- Reports: [`python/experiments/RMSnorm/report.py`](./python/experiments/RMSnorm/report.py)
+- References: [`python/experiments/RMSnorm/refs.py`](./python/experiments/RMSnorm/refs.py)
+
+This experiment layer currently supports registering `torch_official`, `torch_python`, `f32_warp`, and `half2_warp`, then comparing them under unified cases for correctness and latency.
 
 ## LayerNorm Benchmark Snapshot
 
@@ -349,6 +421,8 @@ Current development-grade experiment entrypoints include:
 ```bash
 python3 python/experiments/layernorm/compare.py --case main_fp32
 python3 python/experiments/layernorm/compare.py --case main_fp16 --markdown
+python3 python/experiments/RMSnorm/compare.py --case main_fp32
+python3 python/experiments/RMSnorm/compare.py --case main_fp16 --markdown
 ```
 
 ## Roadmap
@@ -359,9 +433,13 @@ python3 python/experiments/layernorm/compare.py --case main_fp16 --markdown
 - [x] LayerNorm benchmark
 - [x] LayerNorm example
 - [x] LayerNorm development-grade experiment framework
+- [x] `rmsnorm_half` half2 operator integration
+- [x] RMSNorm correctness test
+- [x] RMSNorm benchmark
+- [x] RMSNorm example
+- [x] RMSNorm development-grade experiment framework
 - [ ] float LayerNorm path
 - [ ] PyTorch binding
-- [ ] RMSNorm
 - [ ] Softmax
 - [ ] More public dev notes and teaching-grade kernels
 

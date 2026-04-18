@@ -1,14 +1,16 @@
-# LayerNorm Kernel Development Log
+# CUDA Operator Development Log
 
 ## 1. Goal
 
-This round of work focused on turning a LayerNorm demo kernel into a usable project operator inside `cuda-oplib`, while keeping a running record of:
+This round of work focused on turning prototype CUDA normalization kernels into usable project operators inside `cuda-oplib`, while keeping a running record of:
 
 - kernel version evolution
 - benchmark methodology
 - correctness and performance issues discovered along the way
 - fixes applied during development
 - final project integration steps
+- later development-grade experiment framework work
+- RMSNorm prototype evolution and formal integration
 
 The target path eventually became:
 
@@ -17,6 +19,11 @@ The target path eventually became:
 - public API in `include/cuda_oplib/layernorm.h`
 - build integration via CMake
 - correctness test, benchmark, and example programs
+
+Later, the project expanded into a broader two-layer structure:
+
+- development-grade experiment modules in `python/experiments/`
+- engineering-grade formal operators in `include/`, `src/kernel/`, `tests/`, `benchmarks/`, and `examples/`
 
 ## 2. Initial State
 
@@ -454,7 +461,275 @@ This confirmed that:
 - the new API compiles and links
 - tests/benchmarks/examples now recognize the operator
 
-## 20. Git History
+## 20. Development-Grade Experiment Framework
+
+After the formal `layernorm_half` operator path was integrated into the project,
+the next structural improvement was to separate:
+
+- development-grade experimentation
+- engineering-grade formal integration
+
+The motivation was straightforward:
+
+- ad hoc benchmark scripts were becoming harder to extend
+- kernel comparison conditions were not always centralized
+- adding a new prototype kernel required repeated manual edits
+- the project needed a clearer path from "experimental version" to "formal operator"
+
+### 20.1 New LayerNorm Experiment Layer
+
+A development-grade experiment layer was added under:
+
+- `python/experiments/layernorm/`
+
+This layer is intentionally different from the formal library path in
+`include/`, `src/kernel/`, `tests/`, `benchmarks/`, and `examples/`.
+
+Its role is to support:
+
+- fast prototype comparison
+- correctness checks against references
+- benchmark consistency across kernel variants
+- teaching-oriented recording of version evolution
+
+### 20.2 Files Added to the Experiment Layer
+
+The LayerNorm experiment framework was split into small focused modules:
+
+- `compare.py`
+  - unified experiment entrypoint
+- `registry.py`
+  - implementation registration table
+- `cases.py`
+  - shared benchmark cases such as `main_fp32` and `main_fp16`
+- `report.py`
+  - terminal table output and markdown table output
+- `refs.py`
+  - reference implementations such as `torch.nn.LayerNorm`
+- `layernorm_wrap.cu`
+  - CUDA extension wrapper used to expose experiment kernels to Python
+
+This replaced the earlier "single script does everything" style with a clearer
+division of responsibilities.
+
+### 20.3 Registration Model
+
+The experiment framework introduced an explicit registration model through
+`LayerNormImpl` in `registry.py`.
+
+Each registered implementation now carries:
+
+- `name`
+- `stage`
+- `supported_dtypes`
+- `notes`
+- `builder`
+
+This made it possible to treat implementations uniformly while still preserving
+important metadata about maturity and applicability.
+
+The current registered LayerNorm implementations are:
+
+- `torch_official`
+- `torch_python`
+- `warp`
+- `reduction`
+- `welford`
+- `half2`
+
+The `stage` field was introduced to distinguish roles such as:
+
+- `baseline`
+- `candidate`
+- `draft`
+
+This was especially useful for keeping obviously flawed kernels, such as the
+old reduction variant, visible as part of the learning path without treating
+them as recommended implementations.
+
+### 20.4 Unified Call Path in the Experiment Layer
+
+The experiment layer now follows a consistent call chain:
+
+- `compare.py` selects a case from `cases.py`
+- inputs are generated once for the selected case
+- `registry.py` provides the list of registered implementations
+- `torch_official` is used as the main correctness and performance reference
+- each implementation is run under the same conditions
+- `report.py` formats the result table for terminal or markdown use
+
+For CUDA-backed experiment kernels, the path is:
+
+- `compare.py`
+- `registry.py`
+- `layernorm_wrap.cu`
+- `layernorm.cu`
+- GPU kernel execution
+
+This gave the project a real development pipeline instead of a set of isolated
+benchmark scripts.
+
+### 20.5 Unified Benchmark Cases
+
+Benchmark cases were extracted into `cases.py` so that every implementation
+would be measured under shared conditions.
+
+Examples include:
+
+- `debug_fp32`
+- `main_fp32`
+- `main_fp16`
+- `large_fp16`
+
+This was an important step because it removed case definitions from
+individual scripts and made benchmark runs easier to reproduce.
+
+### 20.6 Unified Correctness and Benchmark Flow
+
+The experiment driver now runs in two explicit phases:
+
+1. correctness check against the official reference
+2. benchmark timing only if correctness passes
+
+This was an intentional design choice.
+
+One of the key lessons from earlier iterations was:
+
+- fast but incorrect kernels are not useful performance results
+
+So the framework now refuses to treat a failing implementation as a valid
+benchmark candidate.
+
+### 20.7 Representative Output From the New Framework
+
+A representative `main_fp32` run produced results like:
+
+- `torch_official`: correct, baseline
+- `torch_python`: correct, slower than official
+- `warp`: correct, very close to official
+- `reduction`: incorrect on this case
+- `welford`: correct, slower than warp
+- `half2`: skipped for float32 because of dtype filtering
+
+This was the first point where the project could automatically express not only
+"how fast is a kernel?" but also:
+
+- is it correct?
+- what stage is it in?
+- is it applicable to the current dtype?
+
+That made the experiment layer much more useful both for engineering and for
+teaching.
+
+### 20.8 Separation Between Development and Engineering Layers
+
+After this change, the project structure became more intentional:
+
+- development-grade layer:
+  - `python/experiments/`
+- engineering-grade layer:
+  - `include/`
+  - `src/kernel/`
+  - `tests/`
+  - `benchmarks/`
+  - `examples/`
+
+The intended lifecycle for future operators is now:
+
+- prototype or iterate in the experiment layer
+- compare against references and older variants
+- decide which implementation is stable enough
+- promote the chosen path into the formal project layer
+
+This distinction is one of the most important structural upgrades in the
+repository so far.
+
+## 21. RMSNorm Experiment Layer
+
+After the LayerNorm experiment framework stabilized, the same structure was
+extended to RMSNorm.
+
+The new development-grade RMSNorm module was added under:
+
+- `python/experiments/RMSnorm/`
+
+Its structure mirrors the LayerNorm experiment layer:
+
+- `compare.py`
+- `registry.py`
+- `cases.py`
+- `report.py`
+- `refs.py`
+- `rmsnorm_wrap.cu`
+- `rmsnorm.cu`
+
+The current registered RMSNorm implementations are:
+
+- `torch_official`
+- `torch_python`
+- `f32_warp`
+- `half2_warp`
+
+This mattered for two reasons:
+
+- it proved that the experiment-layer design was reusable across operators
+- it established the beginning of a project-wide workflow rather than a
+  LayerNorm-only workflow
+
+One representative `main_fp16` run produced results like:
+
+- `torch_official`: correct, fastest baseline on that case
+- `torch_python`: failed current correctness tolerance in float16
+- `f32_warp`: skipped because dtype filtering marked it unsupported
+- `half2_warp`: correct and very close to official RMSNorm
+
+This made RMSNorm the second operator in the repository to gain a structured
+development-grade comparison path.
+
+## 22. RMSNorm Formal Integration
+
+Once the `half2_warp` RMSNorm path looked stable in the experiment layer, it
+was promoted into the engineering-grade project layer.
+
+The formal integration chain now includes:
+
+- public API:
+  - `include/cuda_oplib/rmsnorm.h`
+- formal project kernel:
+  - `src/kernel/rmsnorm_half2.cu`
+- correctness test:
+  - `tests/cpp/test_rmsnorm.cu`
+- project benchmark:
+  - `benchmarks/bench_rmsnorm.cu`
+- minimal example:
+  - `examples/cpp/rmsnorm_example.cu`
+- build registration:
+  - `src/CMakeLists.txt`
+  - `tests/CMakeLists.txt`
+  - `benchmarks/CMakeLists.txt`
+  - `examples/CMakeLists.txt`
+
+The final formal API exposed for this path is:
+
+- `cuda_oplib::rmsnorm_half(...)`
+
+The runtime call chain for the engineering-grade RMSNorm path is now:
+
+- example / test / benchmark
+- `cuda_oplib::rmsnorm_half(...)`
+- `rmsnorm_half2_kernel<<<...>>>`
+
+This is the exact point where RMSNorm stopped being "just an experiment" and
+became an actual project operator.
+
+The build and runtime path were validated during integration:
+
+- CMake configure succeeded
+- full project build succeeded
+- `test_rmsnorm` passed
+- `rmsnorm_example` ran successfully
+
+## 23. Git History
 
 A formal integration commit was created:
 
@@ -462,7 +737,7 @@ A formal integration commit was created:
 
 Push to GitHub was attempted, but the remote push was blocked by local network/proxy/credential issues in the execution environment. The commit exists locally even if remote synchronization was not completed inside the session.
 
-## 21. Summary of Kernel Evolution
+## 24. Summary of Kernel Evolution
 
 The development sequence for this round was:
 
@@ -475,8 +750,11 @@ The development sequence for this round was:
 7. half kernel
 8. half2 kernel with alignment and tail handling
 9. formal operator integration into `cuda-oplib`
+10. development-grade experiment framework for unified comparison
+11. RMSNorm experiment-layer replication
+12. RMSNorm half2 formal operator integration
 
-## 22. Main Lessons Learned
+## 25. Main Lessons Learned
 
 - A CUDA kernel can easily be slower than PyTorch if parallel reduction is poorly designed.
 - Shared-memory reduction helps, but synchronization can still dominate.
@@ -489,8 +767,13 @@ The development sequence for this round was:
   - correctness test
   - benchmark
   - example or binding path
+- Once multiple variants exist, a unified experiment layer becomes necessary.
+- Registration, shared cases, and shared reporting are as valuable for learning
+  as they are for engineering.
+- A reusable experiment-layer template makes it much easier to onboard the next
+  operator instead of rebuilding ad hoc scripts from scratch.
 
-## 23. Current State After This Round
+## 26. Current State After This Round
 
 At the end of this round, the repository contains:
 
@@ -500,5 +783,12 @@ At the end of this round, the repository contains:
 - a project-native test
 - a project-native benchmark
 - a minimal example
+- a development-grade experiment framework for comparing LayerNorm variants
+- a development-grade experiment framework for comparing RMSNorm variants
+- formal `rmsnorm_half` operator API
+- half2-based RMSNorm project kernel implementation
+- RMSNorm test, benchmark, and example targets
 
-The operator has moved from experimental demo status to a usable project component.
+The repository has now moved beyond a single-operator demo and into a small but
+coherent operator-learning project with both development-grade and
+engineering-grade layers.

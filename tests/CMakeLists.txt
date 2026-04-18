@@ -23,3 +23,17 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cpp/test_layernorm.cu")
 
     add_test(NAME layernorm_smoke COMMAND test_layernorm)
 endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cpp/test_rmsnorm.cu")
+    add_executable(test_rmsnorm cpp/test_rmsnorm.cu)
+
+    target_link_libraries(test_rmsnorm PRIVATE cuda_oplib::cuda_oplib CUDA::cudart)
+
+    set_target_properties(
+        test_rmsnorm
+        PROPERTIES
+            CUDA_SEPARABLE_COMPILATION ON
+    )
+
+    add_test(NAME rmsnorm_smoke COMMAND test_rmsnorm)
+endif()
