@@ -14,6 +14,7 @@ CASES = {
         "eps": 1e-5,
         "warmup": 20,
         "iters": 100,
+        "use_residual": False,
     },
     "main_fp16": {
         "rows": 512,
@@ -22,6 +23,25 @@ CASES = {
         "eps": 1e-5,
         "warmup": 20,
         "iters": 100,
+        "use_residual": False,
+    },
+    "main_fp32_fused": {
+        "rows": 512,
+        "hidden": 768,
+        "dtype": "float32",
+        "eps": 1e-5,
+        "warmup": 20,
+        "iters": 100,
+        "use_residual": True,
+    },
+    "main_fp16_fused": {
+        "rows": 512,
+        "hidden": 768,
+        "dtype": "float16",
+        "eps": 1e-5,
+        "warmup": 20,
+        "iters": 100,
+        "use_residual": True,
     },
     "large_fp16": {
         "rows": 4096,
@@ -30,6 +50,6 @@ CASES = {
         "eps": 1e-5,
         "warmup": 30,
         "iters": 200,
+        "use_residual": False,
     },
 }
-

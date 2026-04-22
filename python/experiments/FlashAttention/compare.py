@@ -38,7 +38,6 @@ def benchmark_cpu(fn, warmup: int, iters: int) -> float:
 
     for _ in range(warmup):
         fn()
-
     begin = time.perf_counter()
     for _ in range(iters):
         fn()
@@ -47,62 +46,47 @@ def benchmark_cpu(fn, warmup: int, iters: int) -> float:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Unified RMSNorm experiment driver")
-    parser.add_argument("--case", choices=sorted(CASES.keys()), default="main_fp32")
-    parser.add_argument(
-        "--impls",
-        default="all",
-        help="Comma-separated implementation names to run. Default: all",
-    )
+    parser = argparse.ArgumentParser(description="Unified FlashAttention experiment driver")
+    parser.add_argument("--case", choices=sorted(CASES.keys()), default="debug_fp32")
+    parser.add_argument("--impls", default="all")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--device",
         choices=["cpu", "cuda"],
         default="cuda" if torch.cuda.is_available() else "cpu",
     )
-    parser.add_argument(
-        "--markdown",
-        action="store_true",
-        help="Print a markdown table after the terminal table",
-    )
-    parser.add_argument(
-        "--no-log",
-        action="store_true",
-        help="Do not write a markdown experiment log file",
-    )
+    parser.add_argument("--markdown", action="store_true")
+    parser.add_argument("--no-log", action="store_true")
     return parser.parse_args()
 
 
 def build_log_markdown(
     *,
-    args,
     case_name: str,
-    rows: int,
+    sq: int,
+    sk: int,
     hidden: int,
     dtype_name: str,
     device: torch.device,
-    eps: float,
     warmup: int,
     iters: int,
     seed: int,
-    use_residual: bool,
     rows_out: list[dict],
     timestamp: datetime,
 ) -> str:
     header_lines = [
-        f"# RMSNorm Experiment Log",
+        "# FlashAttention Experiment Log",
         "",
         f"- Date: `{timestamp.isoformat(timespec='seconds')}`",
         f"- Case: `{case_name}`",
-        f"- Rows: `{rows}`",
+        f"- Sq: `{sq}`",
+        f"- Sk: `{sk}`",
         f"- Hidden: `{hidden}`",
         f"- Dtype: `{dtype_name}`",
         f"- Device: `{device}`",
-        f"- Eps: `{eps}`",
         f"- Warmup: `{warmup}`",
         f"- Iters: `{iters}`",
         f"- Seed: `{seed}`",
-        f"- Residual Path: `{'enabled' if use_residual else 'disabled'}`",
         "",
         "## Results",
         "",
@@ -115,39 +99,32 @@ def build_log_markdown(
 def write_experiment_log(
     *,
     case_name: str,
-    rows: int,
+    sq: int,
+    sk: int,
     hidden: int,
     dtype_name: str,
     device: torch.device,
-    eps: float,
     warmup: int,
     iters: int,
     seed: int,
-    use_residual: bool,
     rows_out: list[dict],
 ) -> Path:
     timestamp = datetime.now()
-    dated_dir = EXPLOG_DIR / "RMSnorm" / timestamp.strftime("%Y-%m-%d")
+    dated_dir = EXPLOG_DIR / "FlashAttention" / timestamp.strftime("%Y-%m-%d")
     dated_dir.mkdir(parents=True, exist_ok=True)
-
-    filename = (
-        f"{timestamp.strftime('%H%M%S')}"
-        f"_{case_name}_{dtype_name}_{device.type}.md"
-    )
+    filename = f"{timestamp.strftime('%H%M%S')}_{case_name}_{dtype_name}_{device.type}.md"
     log_path = dated_dir / filename
     log_path.write_text(
         build_log_markdown(
-            args=None,
             case_name=case_name,
-            rows=rows,
+            sq=sq,
+            sk=sk,
             hidden=hidden,
             dtype_name=dtype_name,
             device=device,
-            eps=eps,
             warmup=warmup,
             iters=iters,
             seed=seed,
-            use_residual=use_residual,
             rows_out=rows_out,
             timestamp=timestamp,
         ),
@@ -167,20 +144,17 @@ def main():
         raise RuntimeError("CUDA is not available")
 
     torch.manual_seed(args.seed)
-    rows = case["rows"]
+    sq = case["sq"]
+    sk = case["sk"]
     hidden = case["hidden"]
-    eps = case["eps"]
     warmup = case["warmup"]
     iters = case["iters"]
-    use_residual = case.get("use_residual", False)
 
-    x = torch.randn(rows, hidden, device=device, dtype=dtype)
-    gamma = torch.randn(hidden, device=device, dtype=dtype)
-    residual = (
-        torch.randn(rows, hidden, device=device, dtype=dtype) if use_residual else None
-    )
+    q = torch.randn(sq, hidden, device=device, dtype=dtype)
+    k = torch.randn(sk, hidden, device=device, dtype=dtype)
+    v = torch.randn(sk, hidden, device=device, dtype=dtype)
 
-    registry = build_registry(hidden, device)
+    registry = build_registry(device)
     if args.impls != "all":
         selected = {name.strip() for name in args.impls.split(",") if name.strip()}
         registry = [impl for impl in registry if impl.name in selected]
@@ -188,16 +162,12 @@ def main():
     baseline_impl = next(impl for impl in registry if impl.name == "torch_official")
     baseline_fn = baseline_impl.builder(dtype, device)
     with torch.no_grad():
-        y_ref = baseline_fn(x, gamma, eps, residual)
+        y_ref = baseline_fn(q, k, v)
 
     if device.type == "cuda":
-        baseline_ms = benchmark_cuda(
-            lambda: baseline_fn(x, gamma, eps, residual), warmup, iters
-        )
+        baseline_ms = benchmark_cuda(lambda: baseline_fn(q, k, v), warmup, iters)
     else:
-        baseline_ms = benchmark_cpu(
-            lambda: baseline_fn(x, gamma, eps, residual), warmup, iters
-        )
+        baseline_ms = benchmark_cpu(lambda: baseline_fn(q, k, v), warmup, iters)
 
     rows_out = []
     for impl in registry:
@@ -216,13 +186,27 @@ def main():
             )
             continue
 
+        if device.type not in impl.supported_devices:
+            rows_out.append(
+                {
+                    "name": impl.name,
+                    "stage": impl.stage,
+                    "dtype": dtype_name,
+                    "correct": "skip",
+                    "max_abs_diff": "--",
+                    "avg_ms": "--",
+                    "speedup_vs_ref": "--",
+                    "notes": f"unsupported on {device.type}",
+                }
+            )
+            continue
+
         fn = impl.builder(dtype, device)
         with torch.no_grad():
-            y = fn(x, gamma, eps, residual)
+            y = fn(q, k, v)
 
         max_abs_diff = (y.float() - y_ref.float()).abs().max().item()
         allclose = torch.allclose(y.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
-
         if not allclose:
             rows_out.append(
                 {
@@ -239,9 +223,9 @@ def main():
             continue
 
         if device.type == "cuda":
-            avg_ms = benchmark_cuda(lambda: fn(x, gamma, eps, residual), warmup, iters)
+            avg_ms = benchmark_cuda(lambda: fn(q, k, v), warmup, iters)
         else:
-            avg_ms = benchmark_cpu(lambda: fn(x, gamma, eps, residual), warmup, iters)
+            avg_ms = benchmark_cpu(lambda: fn(q, k, v), warmup, iters)
 
         speedup = baseline_ms / avg_ms if avg_ms > 0 else float("inf")
         rows_out.append(
@@ -258,8 +242,8 @@ def main():
         )
 
     print(
-        f"case={args.case} rows={rows} hidden={hidden} dtype={dtype_name} "
-        f"device={device} warmup={warmup} iters={iters}"
+        f"case={args.case} sq={sq} sk={sk} hidden={hidden} "
+        f"dtype={dtype_name} device={device.type} warmup={warmup} iters={iters}"
     )
     print(render_terminal_table(rows_out))
 
@@ -270,15 +254,14 @@ def main():
     if not args.no_log:
         log_path = write_experiment_log(
             case_name=args.case,
-            rows=rows,
+            sq=sq,
+            sk=sk,
             hidden=hidden,
             dtype_name=dtype_name,
             device=device,
-            eps=eps,
             warmup=warmup,
             iters=iters,
             seed=args.seed,
-            use_residual=use_residual,
             rows_out=rows_out,
         )
         print()

@@ -1,0 +1,38 @@
+CASES = {
+    "debug_tiny_fp32": {
+        "sq": 1,
+        "sk": 8,
+        "hidden": 8,
+        "dtype": "float32",
+        "eps": 0.0,
+        "warmup": 1,
+        "iters": 1,
+    },
+    "debug_fp32": {
+        "sq": 16,
+        "sk": 32,
+        "hidden": 64,
+        "dtype": "float32",
+        "eps": 0.0,
+        "warmup": 5,
+        "iters": 20,
+    },
+    "main_fp32": {
+        "sq": 64,
+        "sk": 128,
+        "hidden": 64,
+        "dtype": "float32",
+        "eps": 0.0,
+        "warmup": 20,
+        "iters": 100,
+    },
+    "large_fp32": {
+        "sq": 128,
+        "sk": 256,
+        "hidden": 128,
+        "dtype": "float32",
+        "eps": 0.0,
+        "warmup": 20,
+        "iters": 100,
+    },
+}
