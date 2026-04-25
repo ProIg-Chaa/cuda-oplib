@@ -342,4 +342,31 @@ __global__ void onlinesfatt_forward_f32_naive_kernel(
 
 
 
+    template <int BLOCK_SIZE, int MAX_FRAG>
+__global__ void online_attention_kernel_tea(...) {
+    int q_row = blockIdx.x;
+    int tid = threadIdx.x;
 
+    const float* q_ptr = Q + q_row * D;
+    float* o_ptr = O + q_row * D;
+
+    OnlineSoftmaxState state = init_softmax_state();
+
+    VecFragment<MAX_FRAG> frag;
+    init_fragment(frag, tid, BLOCK_SIZE, D);
+
+    for (int k_row = 0; k_row < Sk; ++k_row) {
+        const float* k_ptr = K + k_row * D;
+        const float* v_ptr = V + k_row * D;
+
+        float score = 0.0f;
+        for (int d = 0; d < D; ++d) {
+            score += q_ptr[d] * k_ptr[d];
+        }
+        score *= rsqrtf((float)D);
+
+        online_softmax_update(state, score, frag, v_ptr);
+    }
+
+    write_fragment_output(state, frag, o_ptr);
+}

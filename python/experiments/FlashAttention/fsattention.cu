@@ -20,8 +20,9 @@ __device__ __inline__ OnlineSfstate online_sfstate_init(){
 
 //在线合并两个softmaxstate，适用于规约时合并warp状态或者block内不同warp状态
 __device__ __inline__ void combine_state(OnlineSfstate& a, const OnlineSfstate& b){
-    if(a.max == -INFINITY) return; // a是空状态，不需要合并
+    if(a.max == -INFINITY && b.max != -INFINITY) {a.max = b.max; a.exp_sum = b.exp_sum;return;}; // a和b都是空状态，不需要合并
     if(b.max == -INFINITY) return; // b是空状态，不需要合并
+
     if(a.max < b.max){
         float exp_diff = expf(a.max - b.max);
         a.max = b.max;
@@ -146,6 +147,14 @@ __device__ __inline__ void online_frafs_combine(
     }
 }
 
+//这个函数在warp内规约计算点积
+__device__ __inline__ float warp_reduce_score(float score){
+    for(int offset = 16; offset > 0; offset >>= 1){
+        score += __shfl_down_sync(0xffffffff, score, offset);
+    }
+    return score;
+}
+
 
 
 //这个函数在warp内规约state
@@ -165,12 +174,12 @@ __device__ __inline__ void warp_reduce_state(OnlineSfstate& state){
 // 因而每个 warp 最终得到该 tile 的局部 softmax 状态 (m_warp, l_warp, acc_warp)。
 template <int BLOCK_SIZE,int MAX_FRAG>
 __device__ __inline__ void warp_softmax_online(
-    const float* __restrict__ q_ptr,   // [D]
+    float* __restrict__ q_buff,   // [D]
     const float* __restrict__ K_tile,  // [tile_k, D] 负责的key tile
     const float* __restrict__ V_tile,  // [tile_k, D] 负责的value tile
-    float* __restrict__ O_row,         // [D] 输出行指针
-    VecFragment<MAX_FRAG>& frag,
-    OnlineSfstate& state,
+    VecFragment<MAX_FRAG>& frag,       // 每个线程维护的输出片段
+    float &m_warp,
+    float &l_warp,
     int tile_k, //tile的k维度大小
     int D,
     int laneid,
@@ -178,32 +187,124 @@ __device__ __inline__ void warp_softmax_online(
     int q_row,
     int debug
 ){
+
     __shared__ OnlineSfstate warp_states[BLOCK_SIZE / 32]; // 每个warp一个状态
     __shared__ OnlineSfstate block_state; // block内规约后的状态
     __shared__ float buff[BLOCK_SIZE * MAX_FRAG] ; // 每个线程一个fragment的buffer,用于规约时交换fragment
 
+
+
+    float alpha_warp = 0.0f;
+    float beta_warp = 0.0f;
     float inv_d = 1.0f / sqrtf((float)D);
+
     //先计算score并在线更新softmax状态和accumulator
+    //把query行加载到共享内存，供warp内线程共享
+
+    __syncthreads(); //确保query加载完成
+
     for(int k = 0; k < tile_k; ++k){
-        //计算score
+        //规约计算点积，得到score        
         float score = 0.0f;
-        for(int i = 0; i < D; ++i){
-            score += q_ptr[i] * K_tile[k * D + i];
+        for(int d = laneid; d < D; d += 32){
+            score += q_buff[d] * K_tile[k * D + d];
         }
+
+        score = warp_reduce_score(score); //第一个线程得到最终的score
+        //把这个score广播给warp内所有线程，供更新状态和accumulator使用
+        score = __shfl_sync(0xffffffff, score, 0);
         score *= inv_d;
-        //现在warp内所有线程都得到了同score，接下来按维度分工更新状态和accumulator
-        online_frafs_update(state, score, frag, V_tile + k * D);
-        //此时warp内每个线程都更新了自己的frag.acc和frag.d_idx，但state是一样的
+        //现在只让laneid==0的线程更新状态，其他线程只更新accumulator，保证每个warp内状态的一致性
+        if(laneid == 0){
+            if (m_warp < score) {
+                float scale = expf(m_warp - score);
+                l_warp = l_warp * scale + 1.0f;
+                m_warp = score;
+                alpha_warp = scale;
+                beta_warp = 1.0f;
+            } else {
+                float weight = expf(score - m_warp);
+                l_warp += weight;
+                alpha_warp = 1.0f;
+                beta_warp = weight;
+            }            
+        }
+
+        m_warp = __shfl_sync(0xffffffff, m_warp, 0);
+        l_warp = __shfl_sync(0xffffffff, l_warp, 0);
+        alpha_warp = __shfl_sync(0xffffffff, alpha_warp, 0);
+        beta_warp  = __shfl_sync(0xffffffff, beta_warp, 0);
+
+        for(int i = 0; i < frag.valid; ++i){
+            int d = frag.d_idx[i];
+            float v_val = V_tile[k * D + d];
+            frag.acc[i] = frag.acc[i] * alpha_warp + v_val * beta_warp;
+        }
 
         if (debug && q_row == 0 && laneid == 0) {
             printf("[warp-local] wid=%d k=%d score=%f max=%f exp_sum=%f\n",
-                   wid, k, score, state.max, state.exp_sum);
+                   wid, k, score, m_warp, l_warp);
         }
     }
-    if(laneid == 0){ // 每个warp的第一个线程写回状态到共享内存
-        warp_states[threadIdx.x / 32] = state;
+    
+
+}
+
+
+
+template <int BLOCK_SIZE,int MAX_FRAG>
+__global__ void onlinesfatt_forward_f32_warp_kernel(
+    const float* __restrict__ Q,   // [Sq, D]
+    const float* __restrict__ K,   // [Sk, D]
+    const float* __restrict__ V,   // [Sk, D]
+    float* __restrict__ O,         // [Sq, D]
+    int Sq,
+    int Sk,
+    int D,
+    int debug){
+
+    int q_row = blockIdx.x; // 每个block处理一个query行
+    if(q_row >= Sq) return;
+    extern __shared__ float q_buff[] ; // 每行query的缓存，供warp内线程共享，避免重复访问全局内存
+    for(int d = threadIdx.x; d < D; d += BLOCK_SIZE){
+        q_buff[d] = Q[q_row * D + d];
+    }
+    __syncthreads(); //确保query加载完成
+
+    int tid = threadIdx.x; // 每个线程处理一个维度片段
+    int wid = tid / 32; // Assuming warp size is 32
+    int laneid = tid % 32;
+    int warp_num = BLOCK_SIZE / 32;
+
+    float m_warp = -INFINITY; //每个warp维护一个局部的softmax状态
+    float l_warp = 0.0f;
+
+    float* O_row = O + (size_t)q_row * D; // 输出行指针
+    
+    
+    VecFragment<MAX_FRAG> frag;
+    vec_fragment_init(frag, laneid, D);
+    OnlineSfstate state = online_sfstate_init();
+
+    
+    //按k维切分，每个warp处理一个tile
+    //所有warp都参与计算，但不同warp负责不同的tile
+    int tile_k_size = 16; //每个tile的k维度大小，可以调整这个参数来权衡计算和规约的开销
+    for(int k_start = wid * tile_k_size; k_start < Sk; k_start += warp_num * tile_k_size){
+        int k_end = min(k_start + tile_k_size, Sk);
+        warp_softmax_online<BLOCK_SIZE, MAX_FRAG>(q_buff, K + k_start * D, V + k_start * D, frag,
+                                                m_warp, l_warp,  k_end - k_start, D, laneid, wid, q_row, debug);
     }
 
+    __shared__ OnlineSfstate warp_states[BLOCK_SIZE / 32]; // 每个warp一个状态
+    __shared__ OnlineSfstate block_state; // block内规约后的状态
+    __shared__ float buff[BLOCK_SIZE * MAX_FRAG] ; // 每个线程一个fragment的buffer,用于规约时交换fragment
+
+    if(laneid == 0){ // 每个warp的第一个线程写回状态到共享内存
+        warp_states[threadIdx.x / 32].max = m_warp;
+        warp_states[threadIdx.x / 32].exp_sum = l_warp;
+    }
+    
     //开始对所有block内的所有warp状态规约
     __syncthreads(); 
     int warpnum = BLOCK_SIZE / 32;
@@ -264,47 +365,6 @@ __device__ __inline__ void warp_softmax_online(
             }
         }
     }
-
-}
-
-
-
-template <int BLOCK_SIZE,int MAX_FRAG>
-__global__ void onlinesfatt_forward_f32_warp_kernel(
-    const float* __restrict__ Q,   // [Sq, D]
-    const float* __restrict__ K,   // [Sk, D]
-    const float* __restrict__ V,   // [Sk, D]
-    float* __restrict__ O,         // [Sq, D]
-    int Sq,
-    int Sk,
-    int D,
-    int debug){
-
-    int q_row = blockIdx.x; // 每个block处理一个query行
-    if(q_row >= Sq) return;
-    int tid = threadIdx.x; // 每个线程处理一个维度片段
-    int wid = tid / 32; // Assuming warp size is 32
-    int laneid = tid % 32;
-    int warp_num = BLOCK_SIZE / 32;
-
-    float* O_row = O + (size_t)q_row * D; // 输出行指针
-
-    
-
-    OnlineSfstate state = online_sfstate_init();
-    VecFragment<MAX_FRAG> frag;
-    vec_fragment_init(frag, laneid, D);
-    
-    //按k维切分，每个warp处理一个tile
-    //所有warp都参与计算，但不同warp负责不同的tile
-    int tile_k = (Sk + warp_num - 1) / warp_num; //向上取整
-    int k_start = wid * tile_k;
-    int k_end = min(k_start + tile_k, Sk);
-
-    warp_softmax_online<BLOCK_SIZE, MAX_FRAG>(Q + q_row * D, K + k_start * D, V + k_start * D, O_row, frag,
-                                              state, k_end - k_start, D, laneid, wid, q_row, debug);
-    // 此时线程的state是warp内所有线程共享的softmax状态，
-    // frag是每个线程自己的accumulator片段
 
 }
     
