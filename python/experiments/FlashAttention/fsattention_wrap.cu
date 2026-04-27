@@ -39,8 +39,9 @@ torch::Tensor forward_online_warp_f32(
 
     dim3 block(kBlockSize);
     dim3 grid(q.size(0));
+    size_t smem_bytes = static_cast<size_t>(q.size(1)) * sizeof(float);
     onlinesfatt_forward_f32_warp_kernel<kBlockSize, kMaxFrag>
-        <<<grid, block>>>(
+        <<<grid, block, smem_bytes>>>(
             q_contig.data_ptr<float>(),
             k_contig.data_ptr<float>(),
             v_contig.data_ptr<float>(),
@@ -66,8 +67,9 @@ torch::Tensor forward_online_warp_f32_debug(
 
     dim3 block(kDebugBlockSize);
     dim3 grid(q.size(0));
+    size_t smem_bytes = static_cast<size_t>(q.size(1)) * sizeof(float);
     onlinesfatt_forward_f32_warp_kernel<kDebugBlockSize, kMaxFrag>
-        <<<grid, block>>>(
+        <<<grid, block, smem_bytes>>>(
             q_contig.data_ptr<float>(),
             k_contig.data_ptr<float>(),
             v_contig.data_ptr<float>(),

@@ -58,95 +58,6 @@ __device__ __inline__ void vec_fragment_init(
             }
         }
 }
-
-//每个线程维护一个长度为MAX_FRAG的fragment，适用于D较大的情况
-template <int MAX_FRAG>
-__device__ __inline__ void online_frafs_update(
-    OnlineSfstate& state,
-    float score,
-    VecFragment<MAX_FRAG>& frag,
-    const float* __restrict__ V_row  // [Sk, D] 对于每个score对应的V行
-){
-    if(state.max < score){
-        float exp_diff = expf(state.max - score);
-        state.exp_sum = state.exp_sum * exp_diff + 1.0f;
-        state.max = score;
-
-        for(int i = 0; i < frag.valid; ++i){
-            int d = frag.d_idx[i];
-            frag.acc[i] = frag.acc[i] * exp_diff + V_row[d];
-        }
-    } else {
-        float exp_diff = expf(score - state.max);
-        state.exp_sum += exp_diff;
-
-        for(int i = 0; i < frag.valid; ++i){
-            int d = frag.d_idx[i];
-            frag.acc[i] += V_row[d] * exp_diff;
-        }
-    }
-}
-
-//写回output时需要根据维度索引写回正确的位置
-template <int MAX_FRAG>
-__device__ __inline__ void write_back_output(
-    float* __restrict__ O_row, // 对于一行query的输出,shape是[1,D]
-    const VecFragment<MAX_FRAG>& frag,
-    const OnlineSfstate& state
-){
-    float inv_l = 1.0f / state.exp_sum;
-
-    #pragma unroll
-    for(int i = 0; i < frag.valid; ++i){
-        int d = frag.d_idx[i];
-        O_row[d] = frag.acc[i] * inv_l; // Write back the normalized output
-    }  
-}
-
-
-//combine方法需要保证两个状态的fragment对应的维度索引完全一致，
-//即每个线程负责的维度在两个状态中都要有，且位置相同，这样才能正确地合并accumulator
-template <int MAX_FRAG>
-__device__ __inline__ void online_frafs_combine(
-    OnlineSfstate& a,
-    const OnlineSfstate& b,
-    VecFragment<MAX_FRAG>& frag_a,
-    const VecFragment<MAX_FRAG>& frag_b
-){
-    if(a.max < b.max){
-        float exp_diff = expf(a.max - b.max);
-        a.max = b.max;
-        a.exp_sum = b.exp_sum + a.exp_sum * exp_diff;
-        for(int i = 0; i < frag_a.valid; ++i){
-            int d_a = frag_a.d_idx[i];
-            float acc_a = frag_a.acc[i] * exp_diff;
-            // Find corresponding fragment in frag_b
-            for(int j = 0; j < frag_b.valid; ++j){
-                if(frag_b.d_idx[j] == d_a){
-                    acc_a += frag_b.acc[j];
-                    break;
-                }
-            }
-            frag_a.acc[i] = acc_a;
-        }
-    } else {
-        float exp_diff = expf(b.max - a.max);
-        a.exp_sum = a.exp_sum + b.exp_sum * exp_diff;
-        for(int i = 0; i < frag_a.valid; ++i){
-            int d_a = frag_a.d_idx[i];
-            float acc_a = frag_a.acc[i];
-            // Find corresponding fragment in frag_b
-            for(int j = 0; j < frag_b.valid; ++j){
-                if(frag_b.d_idx[j] == d_a){
-                    acc_a += frag_b.acc[j] * exp_diff;
-                    break;
-                }
-            }
-            frag_a.acc[i] = acc_a;
-        }
-    }
-}
-
 //这个函数在warp内规约计算点积
 __device__ __inline__ float warp_reduce_score(float score){
     for(int offset = 16; offset > 0; offset >>= 1){
@@ -178,20 +89,14 @@ __device__ __inline__ void warp_softmax_online(
     const float* __restrict__ K_tile,  // [tile_k, D] 负责的key tile
     const float* __restrict__ V_tile,  // [tile_k, D] 负责的value tile
     VecFragment<MAX_FRAG>& frag,       // 每个线程维护的输出片段
-    float &m_warp,
-    float &l_warp,
+    float& m_warp,
+    float& l_warp,
     int tile_k, //tile的k维度大小
     int D,
     int laneid,
     int wid,
-    int q_row,
-    int debug
+    int q_row
 ){
-
-    __shared__ OnlineSfstate warp_states[BLOCK_SIZE / 32]; // 每个warp一个状态
-    __shared__ OnlineSfstate block_state; // block内规约后的状态
-    __shared__ float buff[BLOCK_SIZE * MAX_FRAG] ; // 每个线程一个fragment的buffer,用于规约时交换fragment
-
 
 
     float alpha_warp = 0.0f;
@@ -201,7 +106,7 @@ __device__ __inline__ void warp_softmax_online(
     //先计算score并在线更新softmax状态和accumulator
     //把query行加载到共享内存，供warp内线程共享
 
-    __syncthreads(); //确保query加载完成
+
 
     for(int k = 0; k < tile_k; ++k){
         //规约计算点积，得到score        
@@ -241,10 +146,6 @@ __device__ __inline__ void warp_softmax_online(
             frag.acc[i] = frag.acc[i] * alpha_warp + v_val * beta_warp;
         }
 
-        if (debug && q_row == 0 && laneid == 0) {
-            printf("[warp-local] wid=%d k=%d score=%f max=%f exp_sum=%f\n",
-                   wid, k, score, m_warp, l_warp);
-        }
     }
     
 
@@ -293,7 +194,7 @@ __global__ void onlinesfatt_forward_f32_warp_kernel(
     for(int k_start = wid * tile_k_size; k_start < Sk; k_start += warp_num * tile_k_size){
         int k_end = min(k_start + tile_k_size, Sk);
         warp_softmax_online<BLOCK_SIZE, MAX_FRAG>(q_buff, K + k_start * D, V + k_start * D, frag,
-                                                m_warp, l_warp,  k_end - k_start, D, laneid, wid, q_row, debug);
+                                                m_warp, l_warp,  k_end - k_start, D, laneid, wid, q_row);
     }
 
     __shared__ OnlineSfstate warp_states[BLOCK_SIZE / 32]; // 每个warp一个状态
@@ -324,20 +225,11 @@ __global__ void onlinesfatt_forward_f32_warp_kernel(
     __syncthreads(); 
 
     state = warp_states[wid];
-    if (debug && q_row == 0 && laneid == 0) {
-        printf("[warp-state] wid=%d local_max=%f local_exp_sum=%f block_max=%f block_exp_sum=%f\n",
-               wid, state.max, state.exp_sum, block_state.max, block_state.exp_sum);
-    }
-
     //每个线程加载规约后的状态
     float diff = expf(state.max - block_state.max); //规约后的max和当前线程状态的max的差值
     
     for(int i = 0; i < frag.valid; ++i){        
         frag.acc[i] = frag.acc[i] * diff / block_state.exp_sum; //把每个线程的accumulator都调整到规约后的max上
-        if (debug && q_row == 0 && wid == 0 && laneid < 2) {
-            printf("[frag-scaled] wid=%d lane=%d i=%d d=%d acc=%f\n",
-                   wid, laneid, i, frag.d_idx[i], frag.acc[i]);
-        }
     }
 
     //每个线程把自己的fragment写到共享内存中，准备规约fragment
@@ -360,9 +252,6 @@ __global__ void onlinesfatt_forward_f32_warp_kernel(
                 acc += buff[w * 32 * MAX_FRAG + laneid * MAX_FRAG + i]; //累加所有warp相同lane的fragment
             }
             O_row[d] = acc; //写回输出
-            if (debug && q_row == 0 && laneid < 2) {
-                printf("[output-write] lane=%d i=%d d=%d out=%f\n", laneid, i, d, acc);
-            }
         }
     }
 
